@@ -6,10 +6,13 @@ const app = express();
 app.use(express.json({ limit: "1mb" }));
 
 const PORT = process.env.PORT || 10000;
-const API_KEY = process.env.OPENAI_API_KEY;
-const MODEL = process.env.OPENAI_MODEL || "gpt-5.5";
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_MODEL =
+  process.env.GEMINI_MODEL || "gemini-3.8-flash";
 
-// Identitas dan instruksi NINA
+const GEMINI_URL =
+  `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+
 const NINA_INSTRUCTIONS = `
 Kamu adalah NINA, personal AI assistant.
 
@@ -21,6 +24,7 @@ Karakter:
 - Ingat konteks percakapan yang diberikan.
 - Jangan mengarang informasi.
 - Jika tidak mengetahui sesuatu, katakan dengan jujur.
+- Berikan jawaban yang mudah dipahami.
 `;
 
 // Pemeriksaan server
@@ -28,24 +32,26 @@ app.get("/", (req, res) => {
   res.json({
     name: "NINA AI Backend",
     status: "online",
-    version: "1.0.0"
+    version: "2.0.0",
+    engine: "Google Gemini"
   });
 });
 
-// Pemeriksaan kesehatan server
+// Pemeriksaan kesehatan
 app.get("/health", (req, res) => {
   res.json({
     status: "healthy",
-    ai: API_KEY ? "configured" : "not configured"
+    ai: GEMINI_API_KEY ? "configured" : "not configured",
+    model: GEMINI_MODEL
   });
 });
 
 // Endpoint percakapan NINA
 app.post("/chat", async (req, res) => {
   try {
-    if (!API_KEY) {
+    if (!GEMINI_API_KEY) {
       return res.status(503).json({
-        error: "OpenAI API belum dikonfigurasi."
+        error: "Gemini API belum dikonfigurasi."
       });
     }
 
@@ -61,88 +67,116 @@ app.post("/chat", async (req, res) => {
     }
 
     if (message.length > 10000) {
-      return res.status(413).json({
+      return res.status(400).json({
         error: "Pesan terlalu panjang."
       });
     }
 
-    // Batasi riwayat percakapan
+    // Batasi jumlah riwayat percakapan
     const safeHistory = Array.isArray(history)
       ? history.slice(-12)
-          .filter(item =>
-            item &&
-            ["user", "assistant"].includes(item.role) &&
-            typeof item.content === "string"
-          )
-          .map(item => ({
-            role: item.role,
-            content: item.content.slice(0, 10000)
-          }))
       : [];
 
-    const input = [
-      ...safeHistory,
-      {
-        role: "user",
-        content: message.trim()
-      }
-    ];
+    const contents = [];
 
-    // Hubungkan ke OpenAI Responses API
-    const response = await fetch(
-      "https://api.openai.com/v1/responses",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${API_KEY}`
-        },
-        body: JSON.stringify({
-          model: MODEL,
-          instructions: NINA_INSTRUCTIONS,
-          input,
-          max_output_tokens: 1200
-        }),
-        signal: AbortSignal.timeout(60000)
+    for (const item of safeHistory) {
+      if (
+        !item ||
+        typeof item.text !== "string" ||
+        !item.text.trim()
+      ) {
+        continue;
       }
-    );
+
+      if (
+        item.text.length > 10000 ||
+        (item.role !== "user" &&
+         item.role !== "assistant")
+      ) {
+        continue;
+      }
+
+      contents.push({
+        role: item.role === "assistant" ? "model" : "user",
+        parts: [{ text: item.text }]
+      });
+    }
+
+    // Hindari mengirim pesan terakhir dua kali
+    const lastItem = contents[contents.length - 1];
+
+    if (
+      !lastItem ||
+      lastItem.role !== "user" ||
+      lastItem.parts[0].text.trim() !== message.trim()
+    ) {
+      contents.push({
+        role: "user",
+        parts: [{ text: message.trim() }]
+      });
+    }
+
+    const response = await fetch(GEMINI_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": GEMINI_API_KEY
+      },
+      body: JSON.stringify({
+        systemInstruction: {
+          parts: [
+            { text: NINA_INSTRUCTIONS }
+          ]
+        },
+        contents,
+        generationConfig: {
+          temperature: 0.7,
+          maxOutputTokens: 2048
+        }
+      }),
+      signal: AbortSignal.timeout(60000)
+    });
 
     const data = await response.json();
 
     if (!response.ok) {
       console.error(
-        "OpenAI error:",
-        response.status
+        "Gemini API error:",
+        response.status,
+        data.error?.message || "Unknown error"
       );
 
       return res.status(502).json({
-        error: "AI sedang mengalami gangguan."
+        error: "Gemini sedang mengalami gangguan.",
+        code: response.status
       });
     }
 
-    // Ambil jawaban AI
-    const reply = (data.output || [])
-      .filter(item => item.type === "message")
-      .flatMap(item => item.content || [])
-      .filter(item => item.type === "output_text")
-      .map(item => item.text)
+    const reply = (
+      data.candidates?.[0]?.content?.parts || []
+    )
+      .filter(part => typeof part.text === "string")
+      .map(part => part.text)
       .join("\n")
       .trim();
 
     if (!reply) {
       return res.status(502).json({
-        error: "AI tidak menghasilkan jawaban."
+        error: "Gemini tidak menghasilkan jawaban."
       });
     }
 
     return res.json({
-      reply: reply,
+      reply,
       source: "ONLINE AI",
-      model: MODEL
+      model: GEMINI_MODEL
     });
 
   } catch (error) {
-    console.error("Server error:", error.message);
+    console.error(
+      "NINA server error:",
+      error.message
+    );
 
     return res.status(500).json({
       error: "Terjadi kesalahan pada server NINA."
@@ -152,5 +186,7 @@ app.post("/chat", async (req, res) => {
 
 // Jalankan server
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`NINA backend berjalan di port ${PORT}`);
+  console.log(
+    `NINA backend berjalan di port ${PORT}`
+  );
 });
