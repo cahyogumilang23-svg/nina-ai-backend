@@ -82,8 +82,8 @@ app.post("/chat", async (req, res) => {
     for (const item of safeHistory) {
       if (
         !item ||
-        typeof item.text !== "string" ||
-        !item.text.trim()
+        typeof (item.content ?? item.text) !== "string" ||
+!(item.content ?? item.text).trim()
       ) {
         continue;
       }
