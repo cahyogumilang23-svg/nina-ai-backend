@@ -89,7 +89,7 @@ app.post("/chat", async (req, res) => {
       }
 
       if (
-        item.text.length > 10000 ||
+        (item.content ?? item.text).length > 10000
         (item.role !== "user" &&
          item.role !== "assistant")
       ) {
@@ -98,7 +98,7 @@ app.post("/chat", async (req, res) => {
 
       contents.push({
         role: item.role === "assistant" ? "model" : "user",
-        parts: [{ text: item.text }]
+        parts: [{ text: item.content ?? item.text }]
       });
     }
 
