@@ -80,26 +80,31 @@ app.post("/chat", async (req, res) => {
     const contents = [];
 
     for (const item of safeHistory) {
-      if (
-        !item ||
-        typeof (item.content ?? item.text) !== "string" ||
-!(item.content ?? item.text).trim()
-      ) {
-        continue;
-      }
+  if (!item) continue;
 
-      if (
-        (item.content ?? item.text).length > 10000
-        (item.role !== "user" &&
-         item.role !== "assistant")
-      ) {
-        continue;
-      }
+  const text = item.content ?? item.text;
 
-      contents.push({
-        role: item.role === "assistant" ? "model" : "user",
-        parts: [{ text: item.content ?? item.text }]
-      });
+  if (
+    typeof text !== "string" ||
+    !text.trim()
+  ) {
+    continue;
+  }
+
+  if (
+    text.length > 10000 ||
+    (item.role !== "user" &&
+     item.role !== "assistant")
+  ) {
+    continue;
+  }
+
+  contents.push({
+    role: item.role === "assistant"
+      ? "model"
+      : "user",
+    parts: [{ text }]
+  });
     }
 
     // Hindari mengirim pesan terakhir dua kali
@@ -130,8 +135,7 @@ app.post("/chat", async (req, res) => {
         },
         contents,
         generationConfig: {
-          temperature: 0.7,
-          maxOutputTokens: 2048
+  maxOutputTokens: 2048
         }
       }),
       signal: AbortSignal.timeout(60000)
